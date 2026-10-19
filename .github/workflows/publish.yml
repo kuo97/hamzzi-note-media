@@ -15,6 +15,9 @@ on:
       no:
         description: "(선택) 이 번호만 지금 바로 발행"
         default: ""
+      name:
+        description: "(쓰지 않음 — 피식니혼고 깨우기 작업을 복제해도 거부되지 않게 받아만 둔다)"
+        default: ""
 permissions:
   contents: write
   pages: write
