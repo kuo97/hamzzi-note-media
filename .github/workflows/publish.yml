@@ -7,6 +7,7 @@ on:
   schedule:
     - cron: "25 22 * * *"   # 07:25 KST (전날 UTC)
     - cron: "25 3 * * *"    # 12:25 KST
+    - cron: "25 7 * * *"    # 16:25 KST (릴스)
     - cron: "40 10 * * *"   # 19:40 KST
   workflow_dispatch:
     inputs:

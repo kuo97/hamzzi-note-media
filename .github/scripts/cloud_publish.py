@@ -3,6 +3,7 @@
 
 큐 = 이 저장소의 초안(draft) 릴리스. 초안은 저장소 권한자만 보인다 — 발행 전 이미지·캡션이 새지 않는다.
   태그 q-<번호>, 본문 JSON {no, title, due, caption, done}, 첨부 image.jpg.  노트북 발행.py --stage 가 만든다.
+  릴스(영상)는 태그 r-<번호>, 본문에 kind="reel" (no = 1000+글 번호), 첨부 video.mp4.
 실행: 발행 시각(due)이 지났고 3시간 안이면 올린다. 넘었으면 missed 로 남긴다. 한 번 실행에 1편만.
 이미지 공개 URL = media/ 에 잠깐 올려 Pages 로 열고, 게시 후 지운다(인스타 API 는 공개 https JPEG 주소가 필요).
 결과 = log.json. 비밀값 IG_TOKEN = 인스타 장기 토큰 문자열.
@@ -94,6 +95,20 @@ def unhost(name):
         pages_build()
 
 
+def publish_reel(url, caption):
+    c = ig("me/media", {"media_type": "REELS", "video_url": url, "caption": caption, "share_to_feed": "true"})
+    for _ in range(72):                                  # 영상 처리는 오래 걸린다(최대 6분)
+        st = ig(c["id"] + "?fields=status_code,status")
+        if st.get("status_code") == "FINISHED":
+            break
+        if st.get("status_code") in ("ERROR", "EXPIRED"):
+            raise RuntimeError("인스타 릴스 처리 실패: %s" % st.get("status"))
+        time.sleep(5)
+    else:
+        raise RuntimeError("릴스 처리가 6분 안에 안 끝났다")
+    return ig("me/media_publish", {"creation_id": c["id"]})["id"]
+
+
 def publish(url, caption):
     c = ig("me/media", {"image_url": url, "caption": caption})
     for _ in range(30):
@@ -123,22 +138,23 @@ def patch_body(rel, m):
     gh("PATCH", "releases/%d" % rel["id"], {"body": json.dumps(m, ensure_ascii=False), "tag_name": rel["tag_name"]})
 
 
-def download(rel):
-    a = [x for x in rel.get("assets", []) if x["name"] == "image.jpg"]
+def download(rel, asset="image.jpg"):
+    a = [x for x in rel.get("assets", []) if x["name"] == asset]
     if not a:
-        raise RuntimeError("image.jpg 첨부 없음")
-    r = subprocess.run(["curl", "-sSL", "--fail", "-o", "_dl.jpg", "-H", "Authorization: Bearer " + GH,
+        raise RuntimeError(asset + " 첨부 없음")
+    out = "_dl" + os.path.splitext(asset)[1]
+    r = subprocess.run(["curl", "-sSL", "--fail", "-o", out, "-H", "Authorization: Bearer " + GH,
                         "-H", "Accept: application/octet-stream", a[0]["url"]], capture_output=True, text=True)
     if r.returncode:
-        raise RuntimeError("이미지 내려받기 실패: " + r.stderr[-200:])
-    return "_dl.jpg"
+        raise RuntimeError("내려받기 실패: " + r.stderr[-200:])
+    return out
 
 
 def run(force=None):
     if not IG:
         sys.exit("비밀값 IG_TOKEN 이 없다")
     rels = gh("GET", "releases?per_page=100")
-    q = sorted([r for r in rels if r.get("draft") and (r.get("tag_name") or "").startswith("q-")],
+    q = sorted([r for r in rels if r.get("draft") and (r.get("tag_name") or "").startswith(("q-", "r-"))],
                key=lambda r: json.loads(r["body"])["due"])
     t = now()
     print("큐 %d건 · 지금 %s KST" % (len(q), t.strftime("%m-%d %H:%M")))
@@ -165,9 +181,13 @@ def run(force=None):
                     patch_body(rel, m)
                 continue
         print("▶ %02d %s %s" % (m["no"], m["title"], m["due"]))
-        name = "%d_%s.jpg" % (int(time.time()), rel["tag_name"])
+        reel = m.get("kind") == "reel"
+        name = "%d_%s.%s" % (int(time.time()), rel["tag_name"], "mp4" if reel else "jpg")
         try:
-            mid = publish(host(download(rel), name), m["caption"])
+            if reel:
+                mid = publish_reel(host(download(rel, "video.mp4"), name), m["caption"])
+            else:
+                mid = publish(host(download(rel), name), m["caption"])
             m["done"] = mid
             patch_body(rel, m)                        # 먼저 적는다 — 중간에 죽어도 두 번 올리지 않게
             record(m, "published", media_id=mid)
