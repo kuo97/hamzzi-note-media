@@ -275,11 +275,30 @@ def test_hosting():
         unhost(name)
 
 
+def test_carousel(no):
+    """게시 없이 캐러셀을 시험한다(mode=carousel-test): 장 2개를 올려 컨테이너가 FINISHED 되는지만 본다."""
+    rel = [r for r in gh("GET", "releases?per_page=100") if r.get("tag_name") == "q-%s" % no][0]
+    slides = sorted(a["name"] for a in rel["assets"] if a["name"].startswith("s") and a["name"].endswith(".jpg"))[:2]
+    pairs = []
+    for s_ in slides:
+        f = download(rel, s_); g = "_dl_" + s_; os.replace(f, g); pairs.append((g, "%d_test_%s" % (int(time.time()), s_)))
+    try:
+        urls = host_many(pairs); kids = []
+        for u in urls:
+            c = ig("me/media", {"image_url": u, "is_carousel_item": "true"}); wait_ready(c["id"]); kids.append(c["id"])
+        c = ig("me/media", {"media_type": "CAROUSEL", "children": ",".join(kids), "caption": "test"}); wait_ready(c["id"])
+        print("[OK] 캐러셀 컨테이너 준비 완료(게시 안 함):", c["id"])
+    finally:
+        unhost_many([n for _, n in pairs])
+
+
 if __name__ == "__main__":
     git("config", "user.name", "hamzzi-cloud")
     git("config", "user.email", "actions@users.noreply.github.com")
     mode = sys.argv[1] if len(sys.argv) > 1 else "run"
     if mode == "test":
         test_hosting()
+    elif mode == "carousel-test":
+        test_carousel(sys.argv[2])
     else:
         run(force=sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None)
