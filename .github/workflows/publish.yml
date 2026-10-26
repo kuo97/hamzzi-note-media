@@ -13,7 +13,7 @@ on:
       mode:
         description: "run = 큐 발행 / test = 토큰·호스팅만 시험(게시 안 함)"
         default: "test"
-      no:
+      "no":                 # 따옴표 필수 — YAML 은 no 를 false 로 읽는다
         description: "(선택) 이 번호만 지금 바로 발행"
         default: ""
       name:
