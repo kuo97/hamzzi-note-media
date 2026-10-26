@@ -4,6 +4,7 @@
 큐 = 이 저장소의 초안(draft) 릴리스. 초안은 저장소 권한자만 보인다 — 발행 전 이미지·캡션이 새지 않는다.
   태그 q-<번호>, 본문 JSON {no, title, due, caption, done}, 첨부 image.jpg.  노트북 발행.py --stage 가 만든다.
   릴스(영상)는 태그 r-<번호>, 본문에 kind="reel" (no = 1000+글 번호), 첨부 video.mp4.
+  캐러셀(여러 장)은 첨부 s01.jpg … s10.jpg (있으면 캐러셀로, image.jpg 는 표지 사본).
 실행: 발행 시각(due)이 지났고 3시간 안이면 올린다. 넘었으면 missed 로 남긴다. 한 번 실행에 1편만.
 이미지 공개 URL = media/ 에 잠깐 올려 Pages 로 열고, 게시 후 지운다(인스타 API 는 공개 https JPEG 주소가 필요).
 결과 = log.json. 비밀값 IG_TOKEN = 인스타 장기 토큰 문자열.
@@ -95,6 +96,56 @@ def unhost(name):
         pages_build()
 
 
+def host_many(pairs):
+    """캐러셀: 여러 장을 한 번에 올리고(커밋 1번) 모두 열릴 때까지 기다린다. pairs = [(로컬 파일, 이름)]"""
+    os.makedirs("media", exist_ok=True)
+    for local, name in pairs:
+        os.replace(local, "media/" + name)
+    commit_push(["media"], "media: %d장" % len(pairs))
+    pages_build()
+    urls = [PAGES + "media/" + n for _, n in pairs]
+    for i in range(48):
+        try:
+            if all(urllib.request.urlopen(urllib.request.Request(u, method="HEAD"), timeout=15).status == 200 for u in urls):
+                print("  공개 확인 %d초 (%d장)" % ((i + 1) * 15, len(urls)))
+                return urls
+        except Exception:
+            pass
+        time.sleep(15)
+    raise RuntimeError("Pages 에 캐러셀 이미지가 12분 안에 다 안 열렸다")
+
+
+def unhost_many(names):
+    gone = [n for n in names if os.path.exists("media/" + n)]
+    for n in gone:
+        os.remove("media/" + n)
+    if gone:
+        commit_push(["media"], "media: remove %d장" % len(gone))
+        pages_build()
+
+
+def wait_ready(cid, tries=30):
+    for _ in range(tries):
+        st = ig(cid + "?fields=status_code,status")
+        if st.get("status_code") == "FINISHED":
+            return
+        if st.get("status_code") in ("ERROR", "EXPIRED"):
+            raise RuntimeError("인스타 처리 실패: %s" % st.get("status"))
+        time.sleep(5)
+    raise RuntimeError("인스타 처리가 늦다")
+
+
+def publish_carousel(urls, caption):
+    """장마다 is_carousel_item 컨테이너 → CAROUSEL 컨테이너(최대 10장) → 게시"""
+    kids = []
+    for u in urls[:10]:
+        c = ig("me/media", {"image_url": u, "is_carousel_item": "true"})
+        wait_ready(c["id"]); kids.append(c["id"])
+    c = ig("me/media", {"media_type": "CAROUSEL", "children": ",".join(kids), "caption": caption})
+    wait_ready(c["id"])
+    return ig("me/media_publish", {"creation_id": c["id"]})["id"]
+
+
 def publish_reel(url, caption):
     c = ig("me/media", {"media_type": "REELS", "video_url": url, "caption": caption, "share_to_feed": "true"})
     for _ in range(72):                                  # 영상 처리는 오래 걸린다(최대 6분)
@@ -183,8 +234,17 @@ def run(force=None):
         print("▶ %02d %s %s" % (m["no"], m["title"], m["due"]))
         reel = m.get("kind") == "reel"
         name = "%d_%s.%s" % (int(time.time()), rel["tag_name"], "mp4" if reel else "jpg")
+        slides = sorted(a["name"] for a in rel.get("assets", []) if a["name"].startswith("s") and a["name"].endswith(".jpg"))
+        many = []
         try:
-            if reel:
+            if slides:                                # 캐러셀: 첨부 s01.jpg … s10.jpg
+                pairs = []
+                for s in slides:
+                    f = download(rel, s); g = "_dl_" + s; os.replace(f, g)
+                    pairs.append((g, "%d_%s_%s" % (int(time.time()), rel["tag_name"], s)))
+                many = [n for _, n in pairs]
+                mid = publish_carousel(host_many(pairs), m["caption"])
+            elif reel:
                 mid = publish_reel(host(download(rel, "video.mp4"), name), m["caption"])
             else:
                 mid = publish(host(download(rel), name), m["caption"])
@@ -198,6 +258,7 @@ def run(force=None):
             record(m, "failed", error=str(e)[:300])
         finally:
             unhost(name)
+            unhost_many(many)
         return                                        # 한 번에 1편만
 
 
